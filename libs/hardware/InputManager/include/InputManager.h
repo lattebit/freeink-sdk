@@ -179,6 +179,11 @@ class InputManager {
   void beginGt911();
   bool gt911ReadReg(uint16_t reg, uint8_t* buf, uint8_t len);
   void gt911ClearStatus();
+  void beginLilyGoEpd47Touch();
+  void updateLilyGoEpd47Touch(unsigned long now);
+  bool readLilyGoEpd47Point(TouchPoint& point);
+  bool lilyGoEpd47ReadBytes(uint8_t* data, uint8_t len);
+  void lilyGoEpd47ClearFlags();
 
   uint8_t currentState;
   uint8_t lastState;
@@ -198,6 +203,8 @@ class InputManager {
 
   bool touchDataEnabled = false;      // I2C up, controller present
   uint8_t gt911Addr = 0;              // resolved GT911 address (0 until probed)
+  unsigned long touchProbeRetryAt = 0;
+  uint8_t touchProbeAttempts = 0;
   unsigned long touchIrqPulseUntil = 0;  // synthesized-confirm window after a press
   unsigned long touchReadAt = 0;         // next scheduled I2C poll
   unsigned long touchReleaseAt = 0;
@@ -226,6 +233,8 @@ class InputManager {
   // Touch timing / protocol constants (ported from the Murphy M3 CHSC6x driver).
   static constexpr unsigned long TOUCH_IRQ_PULSE_MS = 120;   // release hold-over after last valid read
   static constexpr unsigned long TOUCH_SAMPLE_DELAY_MS = 8;  // I2C poll cadence
+  static constexpr unsigned long GT911_RETRY_MS = 3000;
+  static constexpr uint8_t GT911_MAX_DELAYED_PROBES = 5;
   static constexpr int TOUCH_TAP_SLOP_PX = 28;
   static constexpr int TOUCH_SWIPE_MIN_PX = 60;
   static constexpr unsigned long TOUCH_SWIPE_MAX_MS = 700;

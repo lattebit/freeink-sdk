@@ -534,11 +534,19 @@ bool InputManager::wasHomeKeyPressed() const { return touchHomeKeyEvent; }
 void InputManager::beginTouch() {
 #if FREEINK_CAP_TOUCH
   const auto& t = BoardConfig::ACTIVE.touch;
+#ifdef TOUCH_PROBE_DEBUG
+  touchDebugPrintf("[touch] begin controller=%u sda=%d scl=%d irq=%d rst=%d addr=0x%02X/0x%02X\n",
+                   static_cast<unsigned>(t.controller), t.sda, t.scl, t.irq, t.reset, t.i2cAddress, t.i2cAddressAlt);
+#endif
   if (t.controller == BoardConfig::TouchController::None) {
     return;
   }
   if (t.controller == BoardConfig::TouchController::Gt911) {
     beginGt911();
+    return;
+  }
+  if (t.controller == BoardConfig::TouchController::LilyGoEpd47) {
+    beginLilyGoEpd47Touch();
     return;
   }
   // CHSC6x: I2C bus only. The IRQ is left unconfigured — it's a brief pulse on
@@ -554,14 +562,41 @@ void InputManager::beginTouch() {
 
 uint8_t InputManager::serviceTouch() {
 #if FREEINK_CAP_TOUCH
-  if (!touchDataEnabled) {
-    return 0;
-  }
   const unsigned long now = millis();
+  if (!touchDataEnabled) {
+    const auto& t = BoardConfig::ACTIVE.touch;
+    if ((t.controller == BoardConfig::TouchController::Gt911 ||
+         t.controller == BoardConfig::TouchController::LilyGoEpd47) &&
+        touchProbeAttempts < GT911_MAX_DELAYED_PROBES && now >= touchProbeRetryAt) {
+      ++touchProbeAttempts;
+      touchProbeRetryAt = now + GT911_RETRY_MS;
+#ifdef TOUCH_PROBE_DEBUG
+      touchDebugPrintf("[touch] retry touch probe controller=%u\n", static_cast<unsigned>(t.controller));
+#endif
+      if (t.controller == BoardConfig::TouchController::Gt911) {
+        beginGt911();
+      } else {
+        beginLilyGoEpd47Touch();
+      }
+    }
+    if (!touchDataEnabled) {
+#ifdef TOUCH_PROBE_DEBUG
+      static unsigned long lastDisabledLog = 0;
+      if (now - lastDisabledLog >= 5000) {
+        lastDisabledLog = now;
+        touchDebugPrintf("[touch] disabled controller=%u addr=0x%02X\n", static_cast<unsigned>(t.controller),
+                         gt911Addr);
+      }
+#endif
+      return 0;
+    }
+  }
   const auto& t = BoardConfig::ACTIVE.touch;
 
   if (t.controller == BoardConfig::TouchController::Gt911) {
     pollGt911(now);
+  } else if (t.controller == BoardConfig::TouchController::LilyGoEpd47) {
+    updateLilyGoEpd47Touch(now);
   } else {
     updateTouchFromIrq(now, 0);  // detection polls I2C; the IRQ is unused now
     // Synthesized confirm tracks an actually-detected press, not the IRQ line.
@@ -671,6 +706,201 @@ uint16_t InputManager::mapTouchAxis(uint16_t raw, const uint16_t rawMin, const u
   return static_cast<uint32_t>(raw - rawMin) * outMax / (rawMax - rawMin);
 }
 
+// --- LilyGo-EPD47 touch controller -----------------------------------------
+
+void InputManager::beginLilyGoEpd47Touch() {
+  const auto& t = BoardConfig::ACTIVE.touch;
+  touchDataEnabled = false;
+  gt911Addr = 0;
+
+  if (t.sda < 0 || t.scl < 0 || t.i2cAddress == 0) {
+    return;
+  }
+
+  if (t.irq >= 0) {
+    pinMode(t.irq, OUTPUT);
+    digitalWrite(t.irq, HIGH);
+    delay(10);
+  }
+
+  Wire.end();
+  delay(2);
+  Wire.begin(t.sda, t.scl, 100000);
+  Wire.setTimeOut(50);
+
+#ifdef TOUCH_PROBE_DEBUG
+  touchDebugPrintf("[touch] LilyGo EPD47 I2C scan:");
+  for (uint8_t addr = 0x08; addr < 0x78; ++addr) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      touchDebugPrintf(" 0x%02X", addr);
+    }
+  }
+  touchDebugPrintf("\n");
+#endif
+
+  Wire.beginTransmission(t.i2cAddress);
+  if (Wire.endTransmission() != 0) {
+#ifdef TOUCH_PROBE_DEBUG
+    touchDebugPrintf("[touch] LilyGo EPD47 addr=0x%02X ack=0\n", t.i2cAddress);
+#endif
+    if (t.irq >= 0) {
+      pinMode(t.irq, INPUT);
+    }
+    return;
+  }
+
+  const uint8_t wake[] = {0xD1, 0x06};
+  Wire.beginTransmission(t.i2cAddress);
+  Wire.write(wake, sizeof(wake));
+  Wire.endTransmission();
+
+  if (t.irq >= 0) {
+    pinMode(t.irq, INPUT);
+  }
+
+  gt911Addr = t.i2cAddress;
+  touchDataEnabled = true;
+  touchProbeAttempts = 0;
+  lilyGoEpd47ClearFlags();
+#ifdef TOUCH_PROBE_DEBUG
+  touchDebugPrintf("[touch] LilyGo EPD47 probe: addr=0x%02X enabled=1 (sda=%d scl=%d irq=%d)\n", gt911Addr, t.sda,
+                   t.scl, t.irq);
+#endif
+}
+
+bool InputManager::lilyGoEpd47ReadBytes(uint8_t* data, const uint8_t len) {
+  if (gt911Addr == 0 || len == 0) {
+    return false;
+  }
+  Wire.beginTransmission(gt911Addr);
+  Wire.write(data, 2);
+  if (Wire.endTransmission() != 0) {
+#ifdef TOUCH_PROBE_DEBUG
+    static unsigned long lastWriteFailLog = 0;
+    const unsigned long now = millis();
+    if (now - lastWriteFailLog >= 1000) {
+      lastWriteFailLog = now;
+      touchDebugPrintf("[touch] LilyGo EPD47 read addr=0x%02X reg=%02X%02X write failed\n", gt911Addr, data[0],
+                       data[1]);
+    }
+#endif
+    return false;
+  }
+  const uint8_t got = Wire.requestFrom(gt911Addr, len);
+  if (got != len) {
+    while (Wire.available()) Wire.read();
+#ifdef TOUCH_PROBE_DEBUG
+    static unsigned long lastReadFailLog = 0;
+    const unsigned long now = millis();
+    if (now - lastReadFailLog >= 1000) {
+      lastReadFailLog = now;
+      touchDebugPrintf("[touch] LilyGo EPD47 read addr=0x%02X reg=%02X%02X got=%u want=%u\n", gt911Addr, data[0],
+                       data[1], got, len);
+    }
+#endif
+    return false;
+  }
+  for (uint8_t i = 0; i < len; ++i) {
+    data[i] = Wire.read();
+  }
+  return true;
+}
+
+void InputManager::lilyGoEpd47ClearFlags() {
+  if (gt911Addr == 0) {
+    return;
+  }
+  const uint8_t clear[] = {0xD0, 0x00, 0xAB};
+  Wire.beginTransmission(gt911Addr);
+  Wire.write(clear, sizeof(clear));
+  Wire.endTransmission();
+}
+
+bool InputManager::readLilyGoEpd47Point(TouchPoint& point) {
+  uint8_t buffer[40] = {};
+  buffer[0] = 0xD0;
+  buffer[1] = 0x00;
+  if (!lilyGoEpd47ReadBytes(buffer, 7)) {
+    return false;
+  }
+
+  if (buffer[0] == 0xAB) {
+    lilyGoEpd47ClearFlags();
+    return false;
+  }
+
+  uint8_t count = buffer[5] & 0x0F;
+  if (count == 1) {
+    buffer[5] = 0xD0;
+    buffer[6] = 0x07;
+    (void)lilyGoEpd47ReadBytes(&buffer[5], 2);
+  } else if (count > 1) {
+    if (count > 5) {
+      count = 5;
+    }
+    buffer[5] = 0xD0;
+    buffer[6] = 0x07;
+    (void)lilyGoEpd47ReadBytes(&buffer[5], static_cast<uint8_t>(5 * (count - 1) + 3));
+  }
+  lilyGoEpd47ClearFlags();
+
+  const uint16_t rawY = (static_cast<uint16_t>(buffer[1]) << 4) | ((buffer[3] >> 4) & 0x0F);
+  const uint16_t rawX = (static_cast<uint16_t>(buffer[2]) << 4) | (buffer[3] & 0x0F);
+  if ((rawX == 0 && rawY == 0) || rawX > 4095 || rawY > 4095) {
+    return false;
+  }
+
+  const auto& t = BoardConfig::ACTIVE.touch;
+  const uint16_t sx = t.swapXY ? rawY : rawX;
+  const uint16_t sy = t.swapXY ? rawX : rawY;
+  point.valid = true;
+  point.x = mapTouchAxis(sx, t.rawMinX, t.rawMaxX, t.rawMaxX - t.rawMinX);
+  point.y = mapTouchAxis(sy, t.rawMinY, t.rawMaxY, t.rawMaxY - t.rawMinY);
+  if (t.flipX) point.x = static_cast<uint16_t>((t.rawMaxX - t.rawMinX) - point.x);
+  if (t.flipY) point.y = static_cast<uint16_t>((t.rawMaxY - t.rawMinY) - point.y);
+  point.timestamp = millis();
+#ifdef TOUCH_PROBE_DEBUG
+  touchDebugPrintf("[touch] LilyGo EPD47 point frame=[%02X %02X %02X %02X %02X %02X %02X] raw=(%u,%u) mapped=(%u,%u)\n",
+                   buffer[0], buffer[1], buffer[2], buffer[3], buffer[4], buffer[5], buffer[6], rawX, rawY, point.x,
+                   point.y);
+#endif
+  return true;
+}
+
+void InputManager::updateLilyGoEpd47Touch(const unsigned long now) {
+  if (now >= touchReadAt) {
+    touchReadAt = now + TOUCH_SAMPLE_DELAY_MS;
+    TouchPoint point = {false, 0, 0, 0};
+    if (readLilyGoEpd47Point(point)) {
+      touchPoint = point;
+      if (!touchPressed) {
+        touchPressed = true;
+        touchPressedEvent = true;
+        touchDownPoint = point;
+        touchUpPoint = point;
+        touchMovedBeyondTapSlop = false;
+      } else {
+        touchUpPoint = point;
+        const int dx = static_cast<int>(touchUpPoint.x) - static_cast<int>(touchDownPoint.x);
+        const int dy = static_cast<int>(touchUpPoint.y) - static_cast<int>(touchDownPoint.y);
+        if (absInt(dx) > TOUCH_TAP_SLOP_PX || absInt(dy) > TOUCH_TAP_SLOP_PX) {
+          touchMovedBeyondTapSlop = true;
+        }
+      }
+      touchReleaseAt = now + TOUCH_IRQ_PULSE_MS;
+    }
+  }
+
+  if (touchPressed && now >= touchReleaseAt) {
+    touchPressed = false;
+    touchReleasedEvent = true;
+    lastTouchHeldDurationMs = now - touchDownPoint.timestamp;
+    touchUpPoint = touchPoint;
+    touchPoint.valid = false;
+  }
+}
+
 // --- GT911 (LilyGo) ---------------------------------------------------------
 
 void InputManager::beginGt911() {
@@ -770,6 +1000,11 @@ void InputManager::pollGt911(const unsigned long now) {
   if (!gt911ReadReg(0x814E, &status, 1)) {
     return;
   }
+#ifdef TOUCH_PROBE_DEBUG
+  if (status & 0x80) {
+    touchDebugPrintf("[touch] GT911 status=0x%02X\n", status);
+  }
+#endif
   if (!(status & 0x80)) {  // buffer not ready
     return;
   }
@@ -782,13 +1017,14 @@ void InputManager::pollGt911(const unsigned long now) {
   const uint8_t count = status & 0x0F;
   if (count > 0) {
     uint8_t pt[8] = {};
-    if (gt911ReadReg(0x8150, pt, 8)) {
+    const auto& t = BoardConfig::ACTIVE.touch;
+    const uint16_t pointReg = t.gt911CoordsAtByte0 ? 0x8150 : 0x814F;
+    if (gt911ReadReg(pointReg, pt, 8)) {
       // Coordinate bytes start at 0 (no track-id, e.g. M5Paper) or 1 (datasheet
       // standard, e.g. LilyGo) depending on the board's GT911 config.
-      const uint8_t o = BoardConfig::ACTIVE.touch.gt911CoordsAtByte0 ? 0 : 1;
+      const uint8_t o = t.gt911CoordsAtByte0 ? 0 : 1;
       const uint16_t rawX = static_cast<uint16_t>(pt[o]) | (static_cast<uint16_t>(pt[o + 1]) << 8);
       const uint16_t rawY = static_cast<uint16_t>(pt[o + 2]) | (static_cast<uint16_t>(pt[o + 3]) << 8);
-      const auto& t = BoardConfig::ACTIVE.touch;
       touchPoint.valid = true;
       // Panel-native coordinates (calibrated raw range, touch panel's orientation);
       // the app maps to its display/logical frame.

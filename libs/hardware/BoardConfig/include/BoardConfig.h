@@ -283,7 +283,7 @@ enum class InputStyle : uint8_t {
 enum class DisplayController : uint8_t { SSD1677, UC8253, ED2208, LgfxEpd, LilyGoEpd47, IT8951 };
 
 // Optional capacitive touch controller.
-enum class TouchController : uint8_t { None, Chsc6x, Gt911 };
+enum class TouchController : uint8_t { None, Chsc6x, Gt911, LilyGoEpd47 };
 
 // Optional audio output path. Murphy M3 ships an ES8388-compatible stereo
 // codec (I2S slave, control over the shared touch I2C bus) — the contract was
@@ -519,8 +519,8 @@ constexpr TouchConfig LILYGO_T5_PRO_GT911 = {
     TouchController::Gt911, 39, 40, 3, 9, 0x5D, 0, 959, 0, 539, false, 0x14, false, true, PIN_UNASSIGNED, true,
     false, true};  // powerEnable, swapXY=true, flipX=false, flipY=true
 constexpr TouchConfig LILYGO_EPD47_S3_GT911 = {
-    TouchController::Gt911, 18, 17, 47, PIN_UNASSIGNED, 0x5A, 0, 959, 0, 539, false, 0x5D, false, false,
-    PIN_UNASSIGNED, true, false, true};  // reset absent; probe qink-observed 0x5A first, then common GT911 0x5D
+    TouchController::Gt911, 18, 17, 47, PIN_UNASSIGNED, 0x5D, 0, 959, 0, 539, false, 0x14, false, false,
+    PIN_UNASSIGNED, true, false, true};  // official S3 example scans 0x14/0x5D; swapXY + mirrorY
 constexpr FrontlightConfig NO_FRONTLIGHT = {PIN_UNASSIGNED, 0, 0, true};
 constexpr AudioConfig NO_AUDIO = {AudioOutput::None,
                                   PIN_UNASSIGNED,
