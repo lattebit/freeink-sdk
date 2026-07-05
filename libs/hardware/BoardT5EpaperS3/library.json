@@ -1,0 +1,13 @@
+{
+  "name": "BoardT5EpaperS3",
+  "version": "0.1.0",
+  "description": "FreeInk board support for the legacy LilyGo EPD47 T5-ePaper-S3: raw ED047TC1 pins and LovyanGFX bring-up config.",
+  "keywords": "lilygo, t5-epaper-s3, epd47, epaper, board",
+  "authors": [{"name": "FreeInk SDK Contributors"}],
+  "dependencies": {
+    "BoardConfig": "*",
+    "EInkDisplay": "*"
+  },
+  "platforms": "espressif32",
+  "frameworks": ["arduino"]
+}

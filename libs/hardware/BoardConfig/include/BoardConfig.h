@@ -46,6 +46,9 @@
 #ifndef FREEINK_DEVICE_LILYGO
 #define FREEINK_DEVICE_LILYGO 0
 #endif
+#ifndef FREEINK_DEVICE_LILYGO_EPD47_S3
+#define FREEINK_DEVICE_LILYGO_EPD47_S3 0
+#endif
 #ifndef FREEINK_DEVICE_M5PAPER
 #define FREEINK_DEVICE_M5PAPER 0
 #endif
@@ -55,9 +58,9 @@
 
 // --- 2) Coherence: exactly one MCU family, at least one device ---------------
 #if !(FREEINK_DEVICE_X4 || FREEINK_DEVICE_X3 || FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || \
-      FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY)
+      FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_LILYGO_EPD47_S3 || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY)
 #error \
-    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY) in your build env — see platformio.sample.ini."
+    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, M5, MURPHY, DELINK, LILYGO, LILYGO_EPD47_S3, M5PAPER, STICKY) in your build env — see platformio.sample.ini."
 #endif
 // Each device belongs to one MCU family; a binary targets exactly one. X3/X4 are
 // ESP32-C3; M5 PaperColor/Murphy/de-link/LilyGo are ESP32-S3; M5Paper v1.1 is the
@@ -65,7 +68,8 @@
 // SPI peripheral count, and toolchain, so they never share a binary.
 #define FREEINK_MCU_C3 (FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4)
 #define FREEINK_MCU_S3 \
-  (FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_STICKY)
+  (FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO || \
+   FREEINK_DEVICE_LILYGO_EPD47_S3 || FREEINK_DEVICE_STICKY)
 #define FREEINK_MCU_ESP32 (FREEINK_DEVICE_M5PAPER)
 #if (FREEINK_MCU_C3 + FREEINK_MCU_S3 + FREEINK_MCU_ESP32) != 1
 #error \
@@ -105,7 +109,7 @@
 #define FREEINK_DRIVER_UC8253_MURPHY 0
 #endif
 // LilyGo T5 S3: raw-parallel ED047TC1 via LovyanGFX (M5GFX). External-bus driver.
-#if FREEINK_DEVICE_LILYGO
+#if FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_LILYGO_EPD47_S3
 #define FREEINK_DRIVER_LGFX_EPD 1
 #else
 #define FREEINK_DRIVER_LGFX_EPD 0
@@ -121,7 +125,8 @@
 // --- 4) Derive default capabilities (override with -DFREEINK_CAP_*=0/1) -------
 #ifndef FREEINK_CAP_TOUCH
 #define FREEINK_CAP_TOUCH \
-  (FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY)
+  (FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_LILYGO_EPD47_S3 || FREEINK_DEVICE_M5PAPER || \
+   FREEINK_DEVICE_STICKY)
 #endif
 #ifndef FREEINK_CAP_FRONTLIGHT
 #define FREEINK_CAP_FRONTLIGHT (FREEINK_DEVICE_DELINK || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_LILYGO)
@@ -212,7 +217,7 @@
 // (The prebuilt Arduino-ESP32 libs disable BSS-in-PSRAM, so this is a runtime
 // heap allocation, not EXT_RAM_BSS_ATTR.)
 #ifndef FREEINK_FB_PSRAM
-#define FREEINK_FB_PSRAM (FREEINK_DEVICE_M5PAPER)
+#define FREEINK_FB_PSRAM (FREEINK_DEVICE_LILYGO_EPD47_S3 || FREEINK_DEVICE_M5PAPER)
 #endif
 
 // SD transport. de-link is wired for 4-bit SDMMC; SdFat can't drive SDIO, so it
@@ -229,7 +234,7 @@
 #define FREEINK_LOG_TRANSPORT_USB_CDC_WRITE 1
 #define FREEINK_LOG_TRANSPORT_ROM_PRINTF 2
 #ifndef FREEINK_LOG_TRANSPORT
-#if FREEINK_DEVICE_LILYGO
+#if FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_LILYGO_EPD47_S3
 #define FREEINK_LOG_TRANSPORT FREEINK_LOG_TRANSPORT_USB_CDC_WRITE
 #elif FREEINK_DEVICE_STICKY
 #define FREEINK_LOG_TRANSPORT FREEINK_LOG_TRANSPORT_ROM_PRINTF
@@ -250,6 +255,7 @@ enum class Board : uint8_t {
   MurphyM3,
   DeLink,
   LilyGoT5S3,
+  LilyGoEpd47S3,
   M5PaperV11,
   Sticky,
 };
@@ -504,6 +510,9 @@ constexpr TouchConfig NO_TOUCH = {TouchController::None,
 constexpr TouchConfig LILYGO_T5_PRO_GT911 = {
     TouchController::Gt911, 39, 40, 3, 9, 0x5D, 0, 959, 0, 539, false, 0x14, false, true, PIN_UNASSIGNED, true,
     false, true};  // powerEnable, swapXY=true, flipX=false, flipY=true
+constexpr TouchConfig LILYGO_EPD47_S3_GT911 = {
+    TouchController::Gt911, 18, 17, 47, PIN_UNASSIGNED, 0x5D, 0, 959, 0, 539, false, 0x14, false, false,
+    PIN_UNASSIGNED, true, false, true};  // reset absent; swapXY=true, flipY=true like the LilyGo EPD47 S3 demo
 constexpr FrontlightConfig NO_FRONTLIGHT = {PIN_UNASSIGNED, 0, 0, true};
 constexpr AudioConfig NO_AUDIO = {AudioOutput::None,
                                   PIN_UNASSIGNED,
@@ -737,6 +746,43 @@ constexpr BoardProfile LILYGO_T5S3 = {
     NO_SENSORS,
     1.2f};  // uiScale: 4.7" 960x540 touch (~234 PPI) — finger-sized chrome, like Sticky
 
+// --- LilyGo EPD47 T5-ePaper-S3 (legacy ED047TC1 raw-parallel EPD) ------------
+// Older LilyGo-EPD47 ESP32-S3 board. It uses the same 960x540 ED047TC1 panel
+// class as the Pro board but a different pinout and no PCA9535/TPS65185 board
+// glue. The first FreeInk bring-up routes it through the generic LovyanGFX EPD
+// facade using a board-supplied LgfxEpdConfig; if hardware validation shows the
+// legacy CFG_* register cannot be represented as direct Bus_EPD control pins,
+// only this board's bottom bus adapter should change.
+constexpr BoardProfile LILYGO_EPD47_S3 = {
+    Board::LilyGoEpd47S3,
+    "lilygo_epd47_s3",
+    InputStyle::DigitalButtons,
+    DisplayController::LgfxEpd,
+    960,
+    540,
+    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED,
+     PIN_UNASSIGNED},                            // no SPI display pins: parallel bus lives in LgfxEpdConfig
+    0,                                           // displaySpiHz n/a (external bus)
+    {11, 16, 15, 42, PIN_UNASSIGNED, false, 0},  // SD over SPI: SCLK11 MISO16 MOSI15 CS42
+    // GPIO0 is the ED047TC1 CFG_STR line on the legacy board, so it must not be
+    // treated as a normal input after display init. GPIO21 is the single user key
+    // and maps to DOWN/PageForward so the reader remains usable without touch.
+    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 21, PIN_UNASSIGNED, false},
+    14,  // batteryAdc GPIO14, 2:1 divider in the LilyGo EPD47 S3 demo
+    PIN_UNASSIGNED,
+    2.0f,
+    PIN_UNASSIGNED,  // no reliable digital USB detect identified on this board
+    LILYGO_EPD47_S3_GT911,
+    NO_FRONTLIGHT,
+    NO_AUDIO,
+    NO_LEDS,
+    NO_FLIP,
+    NO_SDMMC,
+    NO_GAUGE,
+    NO_MIC,
+    NO_SENSORS,
+    1.2f};
+
 // --- M5Paper v1.1 4.7" (ED047TC1 behind an IT8951E controller) — ESP32 --------
 // 540x960 16-gray panel driven through an IT8951E timing controller over SPI
 // (MOSI12 MISO13 SCLK14 CS15, HRDY/busy GPIO27, EPD power-enable GPIO23). The
@@ -881,7 +927,8 @@ constexpr uint32_t MAX_FRAMEBUFFER_BYTES = cmax(
          cmax(FREEINK_DEVICE_M5 ? panelBytes(M5STACK_PAPER_COLOR) : 0u,
               FREEINK_DEVICE_MURPHY ? panelBytes(MURPHY_M3) : 0u)),
     cmax(cmax(cmax(FREEINK_DEVICE_DELINK ? panelBytes(DE_LINK) : 0u,
-                   FREEINK_DEVICE_LILYGO ? panelBytes(LILYGO_T5S3) : 0u),
+                   cmax(FREEINK_DEVICE_LILYGO ? panelBytes(LILYGO_T5S3) : 0u,
+                        FREEINK_DEVICE_LILYGO_EPD47_S3 ? panelBytes(LILYGO_EPD47_S3) : 0u)),
               FREEINK_DEVICE_M5PAPER ? panelBytes(M5PAPER_V11) : 0u),
          FREEINK_DEVICE_STICKY ? panelBytes(STICKY) : 0u));
 
@@ -896,6 +943,8 @@ constexpr BoardProfile DEFAULT_DEVICE = MURPHY_M3;
 constexpr BoardProfile DEFAULT_DEVICE = DE_LINK;
 #elif FREEINK_DEVICE_LILYGO
 constexpr BoardProfile DEFAULT_DEVICE = LILYGO_T5S3;
+#elif FREEINK_DEVICE_LILYGO_EPD47_S3
+constexpr BoardProfile DEFAULT_DEVICE = LILYGO_EPD47_S3;
 #elif FREEINK_DEVICE_M5PAPER
 constexpr BoardProfile DEFAULT_DEVICE = M5PAPER_V11;
 #elif FREEINK_DEVICE_STICKY
@@ -947,6 +996,11 @@ inline bool selectDevice(Board which) {
       ACTIVE = LILYGO_T5S3;
       return true;
 #endif
+#if FREEINK_DEVICE_LILYGO_EPD47_S3
+    case Board::LilyGoEpd47S3:
+      ACTIVE = LILYGO_EPD47_S3;
+      return true;
+#endif
 #if FREEINK_DEVICE_M5PAPER
     case Board::M5PaperV11:
       ACTIVE = M5PAPER_V11;
@@ -966,6 +1020,7 @@ inline bool selectDevice(Board which) {
 inline bool isM5StackPaperColor() { return ACTIVE.board == Board::M5StackPaperColor; }
 inline bool isMurphyM3() { return ACTIVE.board == Board::MurphyM3; }
 inline bool isDeLink() { return ACTIVE.board == Board::DeLink; }
+inline bool isLilyGoEpd47S3() { return ACTIVE.board == Board::LilyGoEpd47S3; }
 inline bool isM5PaperV11() { return ACTIVE.board == Board::M5PaperV11; }
 inline bool isSticky() { return ACTIVE.board == Board::Sticky; }
 inline bool hasTouch() { return ACTIVE.touch.controller != TouchController::None; }
