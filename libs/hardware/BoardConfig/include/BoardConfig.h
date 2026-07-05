@@ -108,11 +108,18 @@
 #else
 #define FREEINK_DRIVER_UC8253_MURPHY 0
 #endif
-// LilyGo T5 S3: raw-parallel ED047TC1 via LovyanGFX (M5GFX). External-bus driver.
-#if FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_LILYGO_EPD47_S3
+// LilyGo T5 S3 Pro: raw-parallel ED047TC1 via LovyanGFX (M5GFX).
+#if FREEINK_DEVICE_LILYGO
 #define FREEINK_DRIVER_LGFX_EPD 1
 #else
 #define FREEINK_DRIVER_LGFX_EPD 0
+#endif
+// Older LilyGo-EPD47 ESP32-S3 board: ED047TC1 driven by LilyGo's CFG/i80/RMT
+// low-level driver, wrapped as a FreeInk external-bus PanelDriver.
+#if FREEINK_DEVICE_LILYGO_EPD47_S3
+#define FREEINK_DRIVER_LILYGO_EPD47 1
+#else
+#define FREEINK_DRIVER_LILYGO_EPD47 0
 #endif
 // M5Paper v1.1: ED047TC1 behind an IT8951E timing controller (its own framebuffer
 // SRAM, 16-bit-word SPI with MISO reads). The driver owns its SPI end to end.
@@ -271,8 +278,9 @@ enum class InputStyle : uint8_t {
 
 // Panel controller silicon. Drivers are selected from this at begin().
 // LgfxEpd = a raw-parallel EPD with no on-glass controller, driven via LovyanGFX
-// (e.g. ED047TC1 on LilyGo T5 S3).
-enum class DisplayController : uint8_t { SSD1677, UC8253, ED2208, LgfxEpd, IT8951 };
+// (e.g. ED047TC1 on LilyGo T5 S3 Pro). LilyGoEpd47 is the older LilyGo-EPD47
+// ESP32-S3 board driven through the official LilyGo low-level ED047TC1 library.
+enum class DisplayController : uint8_t { SSD1677, UC8253, ED2208, LgfxEpd, LilyGoEpd47, IT8951 };
 
 // Optional capacitive touch controller.
 enum class TouchController : uint8_t { None, Chsc6x, Gt911 };
@@ -511,8 +519,8 @@ constexpr TouchConfig LILYGO_T5_PRO_GT911 = {
     TouchController::Gt911, 39, 40, 3, 9, 0x5D, 0, 959, 0, 539, false, 0x14, false, true, PIN_UNASSIGNED, true,
     false, true};  // powerEnable, swapXY=true, flipX=false, flipY=true
 constexpr TouchConfig LILYGO_EPD47_S3_GT911 = {
-    TouchController::Gt911, 18, 17, 47, PIN_UNASSIGNED, 0x5D, 0, 959, 0, 539, false, 0x14, false, false,
-    PIN_UNASSIGNED, true, false, true};  // reset absent; swapXY=true, flipY=true like the LilyGo EPD47 S3 demo
+    TouchController::Gt911, 18, 17, 47, PIN_UNASSIGNED, 0x5A, 0, 959, 0, 539, false, 0x5D, false, false,
+    PIN_UNASSIGNED, true, false, true};  // reset absent; probe qink-observed 0x5A first, then common GT911 0x5D
 constexpr FrontlightConfig NO_FRONTLIGHT = {PIN_UNASSIGNED, 0, 0, true};
 constexpr AudioConfig NO_AUDIO = {AudioOutput::None,
                                   PIN_UNASSIGNED,
@@ -749,21 +757,19 @@ constexpr BoardProfile LILYGO_T5S3 = {
 // --- LilyGo EPD47 T5-ePaper-S3 (legacy ED047TC1 raw-parallel EPD) ------------
 // Older LilyGo-EPD47 ESP32-S3 board. It uses the same 960x540 ED047TC1 panel
 // class as the Pro board but a different pinout and no PCA9535/TPS65185 board
-// glue. The first FreeInk bring-up routes it through the generic LovyanGFX EPD
-// facade using a board-supplied LgfxEpdConfig; if hardware validation shows the
-// legacy CFG_* register cannot be represented as direct Bus_EPD control pins,
-// only this board's bottom bus adapter should change.
+// glue. The panel needs LilyGo's CFG shift-register + i80/RMT row-output path;
+// keep the reader stack in FreeInk and replace only that bottom bus adapter.
 constexpr BoardProfile LILYGO_EPD47_S3 = {
     Board::LilyGoEpd47S3,
     "lilygo_epd47_s3",
     InputStyle::DigitalButtons,
-    DisplayController::LgfxEpd,
+    DisplayController::LilyGoEpd47,
     960,
     540,
     {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED,
-     PIN_UNASSIGNED},                            // no SPI display pins: parallel bus lives in LgfxEpdConfig
-    0,                                           // displaySpiHz n/a (external bus)
-    {11, 16, 15, 42, PIN_UNASSIGNED, false, 0},  // SD over SPI: SCLK11 MISO16 MOSI15 CS42
+     PIN_UNASSIGNED},                                   // no SPI display pins: official ED047TC1 driver owns the bus
+    0,                                                  // displaySpiHz n/a (external bus)
+    {11, 16, 15, 42, PIN_UNASSIGNED, false, 20000000},  // SD over SPI: SCLK11 MISO16 MOSI15 CS42
     // GPIO0 is the ED047TC1 CFG_STR line on the legacy board, so it must not be
     // treated as a normal input after display init. GPIO21 is the single user key
     // and maps to DOWN/PageForward so the reader remains usable without touch.
