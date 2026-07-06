@@ -1,11 +1,11 @@
 #pragma once
 
-// LilyGo-EPD47 official ESP32-S3 board driver.
+// LilyGo-EPD47 ESP32-S3 board driver.
 //
-// The board uses LilyGo's ED047TC1 low-level parallel driver (CFG shift register
-// + i80/RMT row output), so this PanelDriver owns the display bus end-to-end and
-// reports usesExternalBus(). The FreeInk framebuffer remains 1bpp
-// (bit set = white), expanded row-by-row into the panel's two-bit drive codes.
+// The board uses the ED047TC1 raw parallel panel behind LilyGo's CFG shift
+// register. This driver keeps the FreeInk PanelDriver API and delegates the
+// waveform/update engine to FastEPD so partial updates use previous-frame diffs
+// instead of a single blind scanline pass.
 
 #include "PanelDriver.h"
 
@@ -24,7 +24,7 @@ class LilyGoEpd47Driver : public PanelDriver {
   void displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y, uint16_t w,
                      uint16_t h, bool turnOff) override;
 
-  bool supportsStripGrayscale() const override { return true; }
+  bool supportsStripGrayscale() const override { return false; }
   void copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) override;
   void copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) override;
   void writeGrayscalePlaneStrip(EpdBus& bus, GrayPlane plane, const uint8_t* rows, uint16_t yStart,
@@ -33,18 +33,17 @@ class LilyGoEpd47Driver : public PanelDriver {
   void cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) override;
 
  private:
-  void renderFrame(const uint8_t* fb, RefreshMode mode, bool turnOff);
-  void writeDriveRow(const uint8_t* srcRow, uint32_t outputTimeDus);
-  void allocBaseSnapshot();
+  void renderFrame(const uint8_t* fb, RefreshMode mode, bool turnOff, int16_t startRow = -1, int16_t endRow = -1);
+  bool copyFrameToFastEpd(const uint8_t* fb);
 
   uint16_t _fbW = 0;
   uint16_t _fbH = 0;
   uint16_t _fbWb = 0;
   uint32_t _fbBytes = 0;
-  uint8_t* _base = nullptr;
   bool _mirrorX = false;
   bool _mirrorY = false;
   bool _ready = false;
+  bool _hasPresented = false;
 };
 
 PanelDriver& lilyGoEpd47Driver();
