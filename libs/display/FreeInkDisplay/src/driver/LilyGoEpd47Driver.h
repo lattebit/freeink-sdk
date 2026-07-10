@@ -44,6 +44,7 @@ class LilyGoEpd47Driver : public PanelDriver {
   bool _mirrorY = false;
   bool _ready = false;
   bool _hasPresented = false;
+  uint8_t _largeFastClearCount = 0;
 };
 
 PanelDriver& lilyGoEpd47Driver();

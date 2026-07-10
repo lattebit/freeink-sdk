@@ -20,8 +20,10 @@ namespace freeink {
 namespace {
 
 constexpr uint32_t kFastEpdBusHz = 20'000'000;
-constexpr uint8_t kPartialPasses = 4;
-constexpr uint8_t kFullPasses = 5;
+constexpr uint8_t kPartialPasses = 8;
+constexpr uint8_t kFullPasses = 6;
+constexpr uint8_t kLargeDiffByteDivisor = 80;
+constexpr uint8_t kLargeDiffRowDivisor = 5;
 
 // FastEPD custom panels require a gray matrix even when the driver only uses
 // BB_MODE_1BPP. Keep this tiny placeholder out of DRAM-heavy paths.
@@ -37,6 +39,15 @@ class FastEpdPanel final : public FASTEPD {
 
 FastEpdPanel gPanel;
 
+struct FrameDiffStats {
+  uint32_t changedBytes = 0;
+  uint16_t changedRows = 0;
+  uint32_t byteThreshold = 0;
+  uint16_t rowThreshold = 0;
+  bool bufferAvailable = false;
+  bool large = false;
+};
+
 uint8_t reverseBits(uint8_t value) {
   value = static_cast<uint8_t>((value >> 4) | (value << 4));
   value = static_cast<uint8_t>(((value & 0xCC) >> 2) | ((value & 0x33) << 2));
@@ -50,6 +61,17 @@ const char* refreshModeName(RefreshMode mode) {
     case RefreshMode::Fast: return "fast";
   }
   return "unknown";
+}
+
+const char* clearModeName(int clearMode) {
+  switch (clearMode) {
+    case CLEAR_FAST: return "fast";
+    case CLEAR_SLOW: return "slow";
+    case CLEAR_NONE: return "none";
+    case CLEAR_WHITE: return "white";
+    case CLEAR_BLACK: return "black";
+    default: return "unknown";
+  }
 }
 
 const char* fastEpdErrorName(int rc) {
@@ -75,6 +97,32 @@ void sendShiftData(FASTEPDSTATE* state) {
     gpio_set_level(static_cast<gpio_num_t>(state->panelDef.ioSCL), 1);
   }
   gpio_set_level(static_cast<gpio_num_t>(state->panelDef.ioShiftSTR), 1);
+}
+
+FrameDiffStats measureFullFrameDiff(const uint8_t* current, const uint8_t* previous, uint16_t rowBytes, uint16_t height,
+                                    uint32_t frameBytes) {
+  FrameDiffStats stats;
+  stats.byteThreshold = frameBytes / kLargeDiffByteDivisor;
+  if (stats.byteThreshold == 0) stats.byteThreshold = 1;
+  stats.rowThreshold = height / kLargeDiffRowDivisor;
+  if (stats.rowThreshold == 0) stats.rowThreshold = 1;
+
+  if (!current || !previous || rowBytes == 0 || height == 0) return stats;
+
+  stats.bufferAvailable = true;
+  for (uint16_t y = 0; y < height; ++y) {
+    const uint8_t* cur = current + static_cast<uint32_t>(y) * rowBytes;
+    const uint8_t* prev = previous + static_cast<uint32_t>(y) * rowBytes;
+    bool rowChanged = false;
+    for (uint16_t x = 0; x < rowBytes; ++x) {
+      if (cur[x] == prev[x]) continue;
+      ++stats.changedBytes;
+      rowChanged = true;
+    }
+    if (rowChanged) ++stats.changedRows;
+  }
+  stats.large = stats.changedBytes >= stats.byteThreshold && stats.changedRows >= stats.rowThreshold;
+  return stats;
 }
 
 int legacyEinkPower(void* pBBEP, int on) {
@@ -262,6 +310,7 @@ void LilyGoEpd47Driver::begin(EpdBus& bus) {
   if (gPanel.previousBuffer()) memset(gPanel.previousBuffer(), 0xFF, _fbBytes);
   _ready = true;
   _hasPresented = false;
+  _largeFastClearCount = 0;
   Serial.printf("[lilygo_epd47] FastEPD ready %ux%u fb=%lu partialPasses=%u fullPasses=%u heap=%lu psram=%lu\n", _fbW,
                 _fbH, static_cast<unsigned long>(_fbBytes), kPartialPasses, kFullPasses,
                 static_cast<unsigned long>(ESP.getFreeHeap()),
@@ -328,14 +377,14 @@ void LilyGoEpd47Driver::writeGrayscalePlaneStrip(EpdBus& bus, GrayPlane plane, c
 void LilyGoEpd47Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut,
                                     bool factoryMode) {
   (void)bus;
-  (void)lut;
-  (void)factoryMode;
-#if FREEINK_DRIVER_LILYGO_EPD47
-  renderFrame(fb, RefreshMode::Fast, turnOff);
-#else
   (void)fb;
   (void)turnOff;
-#endif
+  (void)lut;
+  (void)factoryMode;
+  // This panel path currently has no real grayscale plane support. The reader
+  // already displayed the 1bpp base frame before requesting grayscale; treating
+  // the temporary grayscale plane as a full 1bpp frame causes doubled status
+  // bars and fuzzy text.
 }
 
 void LilyGoEpd47Driver::cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) {
@@ -349,16 +398,37 @@ void LilyGoEpd47Driver::renderFrame(const uint8_t* fb, RefreshMode mode, bool tu
 
   if (!copyFrameToFastEpd(fb)) return;
 
+  const bool requestedFullRows = startRow < 0 || endRow < startRow || endRow >= static_cast<int16_t>(_fbH);
   RefreshMode effectiveMode = mode;
-  if (!_hasPresented && effectiveMode == RefreshMode::Fast) effectiveMode = RefreshMode::Half;
+  int clearMode = CLEAR_NONE;
+  const char* reason = "requested";
+  FrameDiffStats diffStats;
+  if (mode == RefreshMode::Fast && requestedFullRows) {
+    diffStats = measureFullFrameDiff(gPanel.currentBuffer(), gPanel.previousBuffer(), _fbWb, _fbH, _fbBytes);
+  }
+  if (!_hasPresented && effectiveMode == RefreshMode::Fast) {
+    effectiveMode = RefreshMode::Half;
+    reason = "first";
+    _largeFastClearCount = 0;
+  } else if (effectiveMode == RefreshMode::Fast && requestedFullRows && diffStats.large) {
+    reason = "large-diff-partial";
+    _largeFastClearCount = 0;
+  } else if (effectiveMode == RefreshMode::Fast) {
+    reason = requestedFullRows ? "small-diff" : "window";
+    _largeFastClearCount = 0;
+  } else {
+    _largeFastClearCount = 0;
+  }
 
   const int64_t startUs = esp_timer_get_time();
   int rc = BBEP_SUCCESS;
   const bool keepOn = !turnOff;
   if (effectiveMode == RefreshMode::Full) {
-    rc = gPanel.fullUpdate(CLEAR_SLOW, keepOn, nullptr);
+    clearMode = CLEAR_SLOW;
+    rc = gPanel.fullUpdate(clearMode, keepOn, nullptr);
   } else if (effectiveMode == RefreshMode::Half) {
-    rc = gPanel.fullUpdate(CLEAR_FAST, keepOn, nullptr);
+    clearMode = CLEAR_FAST;
+    rc = gPanel.fullUpdate(clearMode, keepOn, nullptr);
   } else {
     if (startRow < 0 || endRow < startRow || endRow >= static_cast<int16_t>(_fbH)) {
       startRow = 0;
@@ -370,14 +440,18 @@ void LilyGoEpd47Driver::renderFrame(const uint8_t* fb, RefreshMode mode, bool tu
   const int64_t elapsedMs = (esp_timer_get_time() - startUs) / 1000;
   if (rc == BBEP_SUCCESS) {
     _hasPresented = true;
-    Serial.printf("[lilygo_epd47] FastEPD refresh requested=%s effective=%s rows=%d..%d keepOn=%d elapsed=%lldms heap=%lu "
-                  "psram=%lu\n",
-                  refreshModeName(mode), refreshModeName(effectiveMode), static_cast<int>(startRow), static_cast<int>(endRow),
-                  keepOn ? 1 : 0, static_cast<long long>(elapsedMs), static_cast<unsigned long>(ESP.getFreeHeap()),
+    Serial.printf("[lilygo_epd47] FastEPD refresh requested=%s effective=%s clear=%s reason=%s rows=%d..%d "
+                  "diffBytes=%lu/%lu diffRows=%u/%u diffReady=%d keepOn=%d elapsed=%lldms heap=%lu psram=%lu\n",
+                  refreshModeName(mode), refreshModeName(effectiveMode), clearModeName(clearMode), reason,
+                  static_cast<int>(startRow), static_cast<int>(endRow), static_cast<unsigned long>(diffStats.changedBytes),
+                  static_cast<unsigned long>(diffStats.byteThreshold), diffStats.changedRows, diffStats.rowThreshold,
+                  diffStats.bufferAvailable ? 1 : 0, keepOn ? 1 : 0, static_cast<long long>(elapsedMs),
+                  static_cast<unsigned long>(ESP.getFreeHeap()),
                   static_cast<unsigned long>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
   } else {
-    Serial.printf("[lilygo_epd47] FastEPD refresh failed requested=%s effective=%s rc=%d (%s) elapsed=%lldms\n",
-                  refreshModeName(mode), refreshModeName(effectiveMode), rc, fastEpdErrorName(rc),
+    Serial.printf("[lilygo_epd47] FastEPD refresh failed requested=%s effective=%s clear=%s reason=%s rc=%d (%s) "
+                  "elapsed=%lldms\n",
+                  refreshModeName(mode), refreshModeName(effectiveMode), clearModeName(clearMode), reason, rc, fastEpdErrorName(rc),
                   static_cast<long long>(elapsedMs));
   }
 #else
